@@ -4,25 +4,61 @@ import threading
 import queue
 import time
 import sys
+import os
 import argparse
 from datetime import datetime
 from faster_whisper import WhisperModel
+
+# Try to import enhanced filter first, fallback to basic
+try:
+    from enhanced_profanity_filter import EnhancedProfanityFilter, FilterAction, SeverityLevel
+    ENHANCED_FILTER_AVAILABLE = True
+except ImportError:
+    from profanity_filter import ProfanityFilter, FilterAction, SeverityLevel
+    ENHANCED_FILTER_AVAILABLE = False
+    print("⚠️ Enhanced filter not available, using basic filter")
 
 # ----- CONFIG -----
 UDP_STREAM_URL = "udp://127.0.0.1:1234"
 HTTP_STREAM_URL = "http://127.0.0.1:8080"
 SAMPLE_RATE = 16000
 CHUNK_DURATION = 3  # in seconds
-MODEL_NAME = "tiny"  # tiny/int8 recommended for CPU
+MODEL_NAME = "base"  # tiny/int8 recommended for CPU
 LANGUAGE = "en"
 MAX_QUEUE_SIZE = 10  # Prevent memory buildup
 SAVE_TRANSCRIPT = True  # Save to file
+ENABLE_PROFANITY_FILTER = True  # Enable profanity filtering
+PROFANITY_CONFIG_FILE = "enhanced_profanity_config.json" if ENHANCED_FILTER_AVAILABLE else "profanity_config.json"
+SHOW_FILTER_STATS = True  # Show filtering statistics
+USE_ENHANCED_DATASETS = True  # Use enhanced datasets if available
 # -------------------
 
 # Set up transcription model (CPU-friendly)
 print("🤖 Loading Whisper model...")
 model = WhisperModel(MODEL_NAME, compute_type="int8")
 print(f"✅ Model '{MODEL_NAME}' loaded successfully")
+
+# Set up profanity filter if enabled
+profanity_filter = None
+if ENABLE_PROFANITY_FILTER:
+    print("🛡️  Loading profanity filter...")
+    try:
+        config_path = PROFANITY_CONFIG_FILE if os.path.exists(PROFANITY_CONFIG_FILE) else None
+        
+        if ENHANCED_FILTER_AVAILABLE:
+            profanity_filter = EnhancedProfanityFilter(config_path, use_datasets=USE_ENHANCED_DATASETS)
+            filter_type = f"Enhanced (with {profanity_filter.trie.word_count} words)"
+        else:
+            profanity_filter = ProfanityFilter(config_path)
+            filter_type = "Basic"
+        
+        print(f"✅ {filter_type} profanity filter loaded successfully")
+        if SHOW_FILTER_STATS:
+            print("   Filter configuration loaded")
+    except Exception as e:
+        print(f"⚠️ Error loading profanity filter: {e}")
+        print("   Continuing without profanity filtering...")
+        profanity_filter = None
 
 # Create a thread-safe queue to hold audio chunks
 audio_queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
@@ -126,6 +162,7 @@ def transcriber():
     """Reads chunks from the queue and transcribes them."""
     print("🎙️  Live transcription started...\n")
     chunk_count = 0
+    total_filtered_words = 0
 
     while True:
         try:
@@ -142,13 +179,32 @@ def transcriber():
                 timestamp_str = f"[{current_time:.1f}s]"
                 text = segment.text.strip()
                 
-                if text:  # Only print non-empty transcriptions
-                    output_line = f"{timestamp_str} {text}"
-                    print(output_line)
+                if text:  # Only process non-empty transcriptions
+                    # Apply profanity filter if enabled
+                    console_text = text
+                    file_text = text
+                    filter_info = ""
                     
-                    # Save to file if enabled
+                    if profanity_filter:
+                        # Get colored version for console
+                        console_text, filter_stats = profanity_filter.filter_text(text, for_console=True)
+                        # Get plain version for file
+                        file_text, _ = profanity_filter.filter_text(text, for_console=False)
+                        
+                        if filter_stats.get("words_filtered", 0) > 0:
+                            total_filtered_words += filter_stats["words_filtered"]
+                            if SHOW_FILTER_STATS:
+                                profanity_words = filter_stats.get("profanity_found", [])
+                                filter_info = f" [🛡️ Highlighted: {len(profanity_words)} words]"
+                    
+                    # Prepare console output (with colors)
+                    console_output = f"{timestamp_str} {console_text}{filter_info}"
+                    print(console_output)
+                    
+                    # Save to file if enabled (save plain text version)
                     if transcript_file:
-                        transcript_file.write(f"{output_line}\n")
+                        file_output = f"{timestamp_str} {file_text}"
+                        transcript_file.write(f"{file_output}\n")
                         transcript_file.flush()
                         
         except queue.Empty:
@@ -159,15 +215,44 @@ def transcriber():
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Live transcription of video stream')
+    parser = argparse.ArgumentParser(description='Live transcription of video stream with profanity filtering')
     parser.add_argument('--stream', choices=['udp', 'http'], default='udp',
                         help='Stream type to connect to (default: udp)')
     parser.add_argument('--model', default=MODEL_NAME,
                         help=f'Whisper model to use (default: {MODEL_NAME})')
     parser.add_argument('--language', default=LANGUAGE,
                         help=f'Language for transcription (default: {LANGUAGE})')
+    parser.add_argument('--no-filter', action='store_true',
+                        help='Disable profanity filtering')
+    parser.add_argument('--filter-config', default=PROFANITY_CONFIG_FILE,
+                        help=f'Profanity filter config file (default: {PROFANITY_CONFIG_FILE})')
+    parser.add_argument('--create-filter-config', action='store_true',
+                        help='Create a sample profanity filter configuration and exit')
     
     args = parser.parse_args()
+    
+    # Handle config creation
+    if args.create_filter_config:
+        from profanity_filter import create_sample_config
+        create_sample_config(args.filter_config)
+        return
+    
+    # Override global settings based on arguments
+    global ENABLE_PROFANITY_FILTER, profanity_filter
+    
+    if args.no_filter:
+        ENABLE_PROFANITY_FILTER = False
+        profanity_filter = None
+    else:
+        config_file = args.filter_config
+        if ENABLE_PROFANITY_FILTER and not profanity_filter:
+            # Reload filter with specified config
+            try:
+                profanity_filter = ProfanityFilter(config_file)
+                print(f"✅ Profanity filter loaded with config: {config_file}")
+            except Exception as e:
+                print(f"⚠️ Error loading profanity filter: {e}")
+                profanity_filter = None
     
     # Choose stream URL based on argument
     stream_url = HTTP_STREAM_URL if args.stream == 'http' else UDP_STREAM_URL
@@ -176,6 +261,7 @@ def main():
     print(f"   Stream: {stream_url}")
     print(f"   Model: {args.model}")
     print(f"   Language: {args.language}")
+    print(f"   Profanity Filter: {'Enabled' if profanity_filter else 'Disabled'}")
     print("=" * 50)
     
     # Setup transcript file
@@ -191,7 +277,10 @@ def main():
         audio_thread.start()
         transcriber_thread.start()
 
-        print("\n🎯 Transcription running... Press Ctrl+C to stop\n")
+        print("\n🎯 Transcription running... Press Ctrl+C to stop")
+        if profanity_filter:
+            print("🛡️  Profanity filtering is active")
+        print()
         
         # Keep main thread alive
         while True:
@@ -209,6 +298,19 @@ def main():
         if transcript_file:
             transcript_file.close()
             print(f"📁 Transcript saved to: {transcript_filename}")
+        
+        # Show profanity filter statistics if enabled
+        if profanity_filter and SHOW_FILTER_STATS:
+            stats = profanity_filter.get_statistics()
+            print("\n🛡️  Profanity Filter Statistics:")
+            print(f"   Words processed: {stats['total_words_processed']}")
+            print(f"   Words filtered: {stats['words_filtered']}")
+            print(f"   Filter rate: {stats['filter_rate_percent']}%")
+            if stats['by_severity']:
+                print("   By severity:")
+                for severity, count in stats['by_severity'].items():
+                    if count > 0:
+                        print(f"     {severity}: {count}")
 
 
 if __name__ == "__main__":

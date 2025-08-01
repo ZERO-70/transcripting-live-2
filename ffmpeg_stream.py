@@ -4,7 +4,7 @@ import time
 
 UDP_PORT = 1234  # UDP port
 HTTP_PORT = 8080  # HTTP port for alternative streaming
-VIDEO_FILE = "video.mp4"
+VIDEO_FILE = "video1.mp4"
 
 # FFmpeg command to stream video over UDP (supports multiple clients)
 UDP_FFMPEG_CMD = [

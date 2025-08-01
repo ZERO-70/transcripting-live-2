@@ -1,0 +1,30 @@
+{
+  "word_lists": {
+    "mild": [
+      "damn",
+      "hell",
+      "crap",
+      "bloody"
+    ],
+    "moderate": [
+      "shit",
+      "fuck",
+      "bitch",
+      "ass"
+    ],
+    "severe": [
+      "nigger",
+      "faggot",
+      "retard"
+    ]
+  },
+  "actions": {
+    "mild": "red_highlight",
+    "moderate": "red_highlight",
+    "severe": "red_highlight"
+  },
+  "custom_replacements": {
+    "fuck": "fudge",
+    "shit": "shoot"
+  }
+}
