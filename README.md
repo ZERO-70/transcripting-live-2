@@ -1,6 +1,15 @@
 # Live Transcription Stream Project
 
-A real-time transcription system with advanced profanity filtering capabilities.
+A real-time transcription system with advanced profanity filtering capabilities and live audio playback.
+
+## ✨ Key Features
+
+- **Real-time Transcription**: Live speech-to-text using OpenAI Whisper
+- **Advanced Profanity Filtering**: Multiple filtering approaches (dictionary, AI model-based)
+- **🔊 Live Audio Playback**: Hear the stream audio while viewing transcriptions
+- **Multiple Stream Support**: UDP and HTTP streaming protocols
+- **Flexible Configuration**: Customizable filters, models, and audio settings
+- **Easy-to-Use Interface**: Simple command-line runner for all features
 
 ## 📁 Project Structure
 
@@ -95,11 +104,36 @@ Get your Hugging Face token from: https://huggingface.co/settings/tokens
 The easiest way to run any component:
 
 ```bash
-# Live transcription with different filters
-python3 run.py transcribe-dict      # Dictionary-based filter (fast)
+## 🚀 Quick Start
+
+### With Audio Playback (New!)
+
+```bash
+# Basic transcription with live audio playback
+python3 run.py transcribe-audio
+
+# With AI model-based filtering and audio
+python3 run.py transcribe-audio-model
+
+# List available audio devices first
+python3 run.py list-audio-devices
+
+# Custom audio settings
+python3 run.py transcribe-audio --audio-volume 0.5 --audio-device 0
+```
+
+### Standard Transcription
+
+```bash
+# Different filter types
+python3 run.py transcribe-dict       # Dictionary-based filter
 python3 run.py transcribe-model     # AI model-based filter (accurate)
 python3 run.py transcribe-nofilter  # No filtering (raw transcription)
 python3 run.py transcribe           # Default (dictionary filter)
+
+# Add audio to any existing component
+python3 run.py transcribe-model --enable-audio --audio-volume 0.6
+```
 
 # Demo scripts
 python3 run.py demo-comparison      # Compare all filter types
@@ -112,6 +146,24 @@ python3 run.py test-model          # Test model filters
 
 # Streaming
 python3 run.py stream              # Start video streaming
+```
+
+### Audio Playback Features
+
+```bash
+# List available audio devices
+python3 run.py list-audio-devices
+
+# Audio-enabled transcription variants
+python3 run.py transcribe-audio              # Basic with audio
+python3 run.py transcribe-audio-model        # Model filter + audio
+python3 run.py transcribe-audio-dict         # Dictionary filter + audio
+
+# Audio options for any transcription
+python3 run.py transcribe --enable-audio --audio-volume 0.7 --audio-device 2
+
+# HTTP streaming with audio
+python3 run.py transcribe-audio --stream http --audio-volume 0.5
 ```
 
 ### Advanced Transcription Options
@@ -146,6 +198,11 @@ cd tests && python3 test_comprehensive_filters.py
 
 ## 📖 Documentation
 
+### Audio Features
+- `AUDIO_PLAYBACK_GUIDE.md` - Comprehensive audio playback guide
+- `RUN_PY_AUDIO_GUIDE.md` - Updated run.py usage with audio features
+
+### Core Documentation
 - See `docs/` folder for detailed guides
 - Configuration examples in `config/` folder
 - Demo scripts in `demos/` folder

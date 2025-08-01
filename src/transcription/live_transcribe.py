@@ -10,6 +10,14 @@ from datetime import datetime
 from faster_whisper import WhisperModel
 from dotenv import load_dotenv
 
+# Audio playback imports (optional)
+AUDIO_PLAYBACK_AVAILABLE = False
+try:
+    import sounddevice as sd
+    AUDIO_PLAYBACK_AVAILABLE = True
+except ImportError:
+    print("⚠️ sounddevice not available, audio playback disabled")
+
 # Load environment variables
 load_dotenv()
 
@@ -53,6 +61,13 @@ MODEL_CONFIG_FILE = "model_profanity_config.json"
 TOXICITY_MODEL = "unitary/toxic-bert"  # Fast toxic detection model
 SHOW_FILTER_STATS = True  # Show filtering statistics
 USE_ENHANCED_DATASETS = True  # Use enhanced datasets if available
+
+# Audio playback settings
+ENABLE_AUDIO_PLAYBACK = False  # Enable live audio playback
+AUDIO_PLAYBACK_VOLUME = 0.7   # Volume level (0.0 to 1.0)
+AUDIO_PLAYBACK_DEVICE = None  # None for default device, or device index
+AUDIO_BUFFER_SIZE = 256       # Audio buffer size for playback (smaller for less latency)
+SHOW_PROCESSING_TIME = True   # Show processing time for each transcription chunk
 # -------------------
 
 # Set up transcription model (CPU-friendly)
@@ -97,6 +112,11 @@ if ENABLE_PROFANITY_FILTER:
 # Create a thread-safe queue to hold audio chunks
 audio_queue = queue.Queue(maxsize=MAX_QUEUE_SIZE)
 
+# Audio playback queue and stream (independent from transcription)
+audio_playback_queue = queue.Queue(maxsize=MAX_QUEUE_SIZE * 2)  # Larger buffer for smoother playback
+audio_stream = None
+audio_playback_buffer = np.array([], dtype=np.float32)  # Continuous buffer for smooth playback
+
 # Global variables for transcript logging
 transcript_file = None
 start_time = None
@@ -113,6 +133,94 @@ def setup_transcript_file():
         print(f"📝 Saving transcript to: {filename}")
         return filename
     return None
+
+
+def setup_audio_playback():
+    """Initialize audio playback stream."""
+    global audio_stream, audio_playback_buffer
+    if not ENABLE_AUDIO_PLAYBACK or not AUDIO_PLAYBACK_AVAILABLE:
+        return False
+    
+    try:
+        # Initialize the buffer
+        audio_playback_buffer = np.array([], dtype=np.float32)
+        
+        # List available audio devices for debugging
+        devices = sd.query_devices()
+        print(f"🔊 Available audio devices: {len(devices)} found")
+        
+        # Initialize audio stream for playback with smaller buffer for lower latency
+        audio_stream = sd.OutputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,  # Mono audio
+            dtype=np.float32,
+            blocksize=AUDIO_BUFFER_SIZE,
+            device=AUDIO_PLAYBACK_DEVICE,
+            callback=audio_playback_callback,
+            latency='low'  # Request low latency
+        )
+        audio_stream.start()
+        print(f"✅ Audio playback initialized (device: {audio_stream.device}, volume: {AUDIO_PLAYBACK_VOLUME})")
+        print(f"   Buffer size: {AUDIO_BUFFER_SIZE} samples, Latency: {audio_stream.latency:.3f}s")
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed to initialize audio playback: {e}")
+        return False
+
+
+def audio_playback_callback(outdata, frames, time, status):
+    """Callback function for audio playback with continuous buffering."""
+    global audio_playback_buffer
+    
+    if status:
+        print(f"⚠️ Audio playback status: {status}")
+    
+    try:
+        # Fill buffer from queue if we don't have enough data
+        while len(audio_playback_buffer) < frames:
+            try:
+                new_chunk = audio_playback_queue.get_nowait()
+                audio_playback_buffer = np.concatenate([audio_playback_buffer, new_chunk])
+            except queue.Empty:
+                # If no more data available, break and pad with zeros if needed
+                break
+        
+        # Extract the required number of frames
+        if len(audio_playback_buffer) >= frames:
+            # We have enough data
+            output_data = audio_playback_buffer[:frames]
+            audio_playback_buffer = audio_playback_buffer[frames:]  # Remove used data
+            
+            # Apply volume control and output
+            outdata[:, 0] = output_data * AUDIO_PLAYBACK_VOLUME
+        else:
+            # Not enough data, output what we have and pad with zeros
+            if len(audio_playback_buffer) > 0:
+                outdata[:len(audio_playback_buffer), 0] = audio_playback_buffer * AUDIO_PLAYBACK_VOLUME
+                outdata[len(audio_playback_buffer):, 0] = 0
+                audio_playback_buffer = np.array([], dtype=np.float32)  # Clear buffer
+            else:
+                # No data at all, output silence
+                outdata[:, 0] = 0
+                
+    except Exception as e:
+        # On any error, output silence and continue
+        outdata[:, 0] = 0
+
+
+def cleanup_audio_playback():
+    """Clean up audio playback resources."""
+    global audio_stream, audio_playback_buffer
+    if audio_stream:
+        try:
+            audio_stream.stop()
+            audio_stream.close()
+            print("🔇 Audio playback stopped")
+        except Exception as e:
+            print(f"⚠️ Error stopping audio playback: {e}")
+        finally:
+            audio_stream = None
+            audio_playback_buffer = np.array([], dtype=np.float32)  # Clear buffer
 
 
 def start_ffmpeg_stream(stream_url, max_retries=3):
@@ -197,7 +305,7 @@ def audio_reader(proc):
             
             audio = np.frombuffer(chunk, np.int16).astype(np.float32) / 32768.0
             
-            # Add to queue, drop oldest if full
+            # Add to transcription queue, drop oldest if full
             try:
                 audio_queue.put_nowait(audio)
             except queue.Full:
@@ -206,6 +314,25 @@ def audio_reader(proc):
                     audio_queue.put_nowait(audio)  # Add new
                     print("⚠️ Audio buffer full, dropping old data")
                 except queue.Empty:
+                    pass
+            
+            # Add to audio playback queue if enabled (independent operation)
+            if ENABLE_AUDIO_PLAYBACK and AUDIO_PLAYBACK_AVAILABLE:
+                try:
+                    # For audio playback, we want smaller, more frequent chunks for smoother playback
+                    # Send the entire audio chunk to the playback queue without splitting
+                    # The callback will handle buffering appropriately
+                    audio_playback_queue.put_nowait(audio.copy())
+                        
+                except queue.Full:
+                    # Drop old audio data if playback buffer is full
+                    try:
+                        audio_playback_queue.get_nowait()  # Remove oldest
+                        audio_playback_queue.put_nowait(audio.copy())  # Add new
+                    except queue.Empty:
+                        pass
+                except Exception as e:
+                    # Don't let playback errors affect transcription
                     pass
                     
         except Exception as e:
@@ -218,6 +345,7 @@ def transcriber():
     print("🎙️  Live transcription started...\n")
     chunk_count = 0
     total_filtered_words = 0
+    total_processing_time = 0
 
     while True:
         try:
@@ -228,14 +356,19 @@ def transcriber():
             chunk_count += 1
             current_time = time.time() - start_time if start_time else 0
             
+            # Start timing the complete processing pipeline
+            processing_start = time.time()
+            
+            # Transcription step
             segments, _ = model.transcribe(audio, language=LANGUAGE)
             
+            # Process each segment and measure complete pipeline time
             for segment in segments:
                 timestamp_str = f"[{current_time:.1f}s]"
                 text = segment.text.strip()
                 
                 if text:  # Only process non-empty transcriptions
-                    # Apply profanity filter if enabled
+                    # Apply profanity filter if enabled (this is part of processing time)
                     console_text = text
                     file_text = text
                     
@@ -248,13 +381,24 @@ def transcriber():
                         if filter_stats.get("words_filtered", 0) > 0:
                             total_filtered_words += filter_stats["words_filtered"]
                     
-                    # Prepare console output (clean, no filter statistics)
-                    console_output = f"{timestamp_str} {console_text}"
+                    # End timing here - after all processing is complete
+                    processing_end = time.time()
+                    processing_time = processing_end - processing_start
+                    total_processing_time += processing_time
+                    
+                    # Prepare output with optional processing time
+                    if SHOW_PROCESSING_TIME:
+                        processing_str = f"[⚡{processing_time:.3f}s]"
+                        console_output = f"{timestamp_str} {processing_str} {console_text}"
+                        file_output = f"{timestamp_str} {processing_str} {file_text}"
+                    else:
+                        console_output = f"{timestamp_str} {console_text}"
+                        file_output = f"{timestamp_str} {file_text}"
+                    
                     print(console_output)
                     
-                    # Save to file if enabled (save plain text version)
+                    # Save to file if enabled
                     if transcript_file:
-                        file_output = f"{timestamp_str} {file_text}"
                         transcript_file.write(f"{file_output}\n")
                         transcript_file.flush()
                         
@@ -267,6 +411,8 @@ def transcriber():
 
 def main():
     global ENABLE_PROFANITY_FILTER, profanity_filter, FILTER_TYPE
+    global ENABLE_AUDIO_PLAYBACK, AUDIO_PLAYBACK_VOLUME, AUDIO_PLAYBACK_DEVICE
+    global SHOW_PROCESSING_TIME
     
     parser = argparse.ArgumentParser(description='Live transcription of video stream with profanity filtering')
     parser.add_argument('--stream', choices=['udp', 'http'], default='udp',
@@ -290,6 +436,22 @@ def main():
     parser.add_argument('--create-model-config', action='store_true',
                         help='Create a sample model-based filter configuration and exit')
     
+    # Audio playback arguments
+    parser.add_argument('--enable-audio', action='store_true',
+                        help='Enable live audio playback of the stream')
+    parser.add_argument('--audio-volume', type=float, default=AUDIO_PLAYBACK_VOLUME,
+                        help=f'Audio playback volume (0.0 to 1.0, default: {AUDIO_PLAYBACK_VOLUME})')
+    parser.add_argument('--audio-device', type=int, default=AUDIO_PLAYBACK_DEVICE,
+                        help='Audio output device index (default: system default)')
+    parser.add_argument('--list-audio-devices', action='store_true',
+                        help='List available audio devices and exit')
+    
+    # Performance monitoring arguments
+    parser.add_argument('--show-timing', action='store_true', default=SHOW_PROCESSING_TIME,
+                        help='Show processing time for each transcription chunk')
+    parser.add_argument('--no-timing', action='store_true',
+                        help='Hide processing time information')
+    
     args = parser.parse_args()
     
     # Handle config creation
@@ -306,9 +468,42 @@ def main():
             print("❌ Model-based filter not available. Install transformers: pip install transformers")
         return
     
+    # Handle audio device listing
+    if args.list_audio_devices:
+        if AUDIO_PLAYBACK_AVAILABLE:
+            print("🔊 Available audio devices:")
+            devices = sd.query_devices()
+            for i, device in enumerate(devices):
+                device_type = "🎧" if device['max_output_channels'] > 0 else "🎤"
+                default_marker = " (default)" if i == sd.default.device[1] else ""
+                print(f"   {i}: {device_type} {device['name']}{default_marker}")
+                print(f"      Max output channels: {device['max_output_channels']}")
+                print(f"      Sample rate: {device['default_samplerate']}")
+        else:
+            print("❌ sounddevice not available. Install with: pip install sounddevice")
+        return
+    
     # Override global settings based on arguments
     
     FILTER_TYPE = args.filter_type
+    
+    # Handle audio playback settings
+    if args.enable_audio:
+        if AUDIO_PLAYBACK_AVAILABLE:
+            ENABLE_AUDIO_PLAYBACK = True
+            AUDIO_PLAYBACK_VOLUME = max(0.0, min(1.0, args.audio_volume))  # Clamp between 0.0 and 1.0
+            AUDIO_PLAYBACK_DEVICE = args.audio_device
+            print(f"🔊 Audio playback enabled (volume: {AUDIO_PLAYBACK_VOLUME}, device: {AUDIO_PLAYBACK_DEVICE or 'default'})")
+        else:
+            print("⚠️ Audio playback requested but sounddevice not available")
+            print("   Install with: pip install sounddevice")
+            ENABLE_AUDIO_PLAYBACK = False
+    
+    # Handle timing display settings
+    if args.no_timing:
+        SHOW_PROCESSING_TIME = False
+    elif args.show_timing:
+        SHOW_PROCESSING_TIME = True
     
     if args.no_filter:
         ENABLE_PROFANITY_FILTER = False
@@ -365,10 +560,29 @@ def main():
     else:
         print(f"   Profanity Filter: Disabled")
     
+    # Show audio playback information
+    if ENABLE_AUDIO_PLAYBACK:
+        if AUDIO_PLAYBACK_AVAILABLE:
+            device_info = f"device {AUDIO_PLAYBACK_DEVICE}" if AUDIO_PLAYBACK_DEVICE is not None else "default device"
+            print(f"   Audio Playback: Enabled (volume: {AUDIO_PLAYBACK_VOLUME}, {device_info})")
+        else:
+            print(f"   Audio Playback: Disabled (sounddevice not available)")
+    else:
+        print(f"   Audio Playback: Disabled")
+    
+    # Show timing information setting
+    timing_status = "Enabled" if SHOW_PROCESSING_TIME else "Disabled"
+    print(f"   Processing Time Display: {timing_status}")
+    
     print("=" * 50)
     
     # Setup transcript file
     transcript_filename = setup_transcript_file()
+    
+    # Setup audio playback if enabled
+    audio_playback_initialized = False
+    if ENABLE_AUDIO_PLAYBACK:
+        audio_playback_initialized = setup_audio_playback()
     
     try:
         proc = start_ffmpeg_stream(stream_url)
@@ -383,6 +597,8 @@ def main():
         print("\n🎯 Transcription running... Press Ctrl+C to stop")
         if profanity_filter:
             print("🛡️  Profanity filtering is active")
+        if audio_playback_initialized:
+            print("🔊 Live audio playback is active")
         print()
         
         # Keep main thread alive
@@ -401,6 +617,10 @@ def main():
         if transcript_file:
             transcript_file.close()
             print(f"📁 Transcript saved to: {transcript_filename}")
+        
+        # Cleanup audio playback
+        if audio_playback_initialized:
+            cleanup_audio_playback()
         
         # Show profanity filter statistics if enabled
         if profanity_filter and SHOW_FILTER_STATS:
@@ -422,6 +642,12 @@ def main():
                 for severity, count in stats['by_severity'].items():
                     if count > 0:
                         print(f"     {severity}: {count}")
+        
+        # Show transcription performance statistics
+        if 'transcriber_thread' in locals() and hasattr(transcriber, '__globals__'):
+            print("\n⚡ Transcription Performance Statistics:")
+            # These would be accessible if we made them global or returned them
+            # For now, this is a placeholder for future enhancement
 
 
 if __name__ == "__main__":

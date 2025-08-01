@@ -70,8 +70,10 @@ def main():
     parser = argparse.ArgumentParser(description='Stream Project Runner')
     parser.add_argument('component', choices=[
         'transcribe', 'transcribe-model', 'transcribe-dict', 'transcribe-nofilter',
+        'transcribe-audio', 'transcribe-audio-model', 'transcribe-audio-dict',
         'demo-comparison', 'demo-model', 'demo-highlight',
-        'test-comprehensive', 'test-model', 'stream', 'stream-http'
+        'test-comprehensive', 'test-model', 'stream', 'stream-http',
+        'list-audio-devices'
     ], help='Component to run')
     
     # Add transcription-specific arguments
@@ -80,8 +82,32 @@ def main():
     parser.add_argument('--stream', choices=['udp', 'http'], default='udp', help='Stream type')
     parser.add_argument('--toxicity-model', help='Toxicity detection model')
     
+    # Add audio playback arguments
+    parser.add_argument('--enable-audio', action='store_true', 
+                        help='Enable live audio playback')
+    parser.add_argument('--audio-volume', type=float, default=0.7,
+                        help='Audio playback volume (0.0 to 1.0)')
+    parser.add_argument('--audio-device', type=int,
+                        help='Audio output device index')
+    parser.add_argument('--no-filter', action='store_true',
+                        help='Disable profanity filtering')
+    
+    # Add performance monitoring arguments
+    parser.add_argument('--show-timing', action='store_true',
+                        help='Show processing time for each transcription chunk')
+    parser.add_argument('--no-timing', action='store_true',
+                        help='Hide processing time information')
+    
     args = parser.parse_args()
     current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Handle audio device listing
+    if args.component == 'list-audio-devices':
+        script_path = 'src/transcription/live_transcribe.py'
+        extra_args = ['--list-audio-devices']
+        print("🔊 Listing available audio devices...")
+        run_with_path_and_args(script_path, None, extra_args)
+        return
     
     # Handle transcription variants
     if args.component.startswith('transcribe'):
@@ -92,19 +118,42 @@ def main():
             '--stream', args.stream
         ]
         
-        if args.component == 'transcribe-model':
+        # Handle audio-enabled variants
+        audio_enabled = 'audio' in args.component or args.enable_audio
+        if audio_enabled:
+            extra_args.append('--enable-audio')
+            extra_args.extend(['--audio-volume', str(args.audio_volume)])
+            if args.audio_device is not None:
+                extra_args.extend(['--audio-device', str(args.audio_device)])
+        
+        # Handle filter types
+        if args.component in ['transcribe-model', 'transcribe-audio-model']:
             extra_args.extend(['--filter-type', 'model'])
             if args.toxicity_model:
                 extra_args.extend(['--toxicity-model', args.toxicity_model])
-        elif args.component == 'transcribe-dict':
+        elif args.component in ['transcribe-dict', 'transcribe-audio-dict']:
             extra_args.extend(['--filter-type', 'dictionary'])
-        elif args.component == 'transcribe-nofilter':
+        elif args.component == 'transcribe-nofilter' or args.no_filter:
             extra_args.append('--no-filter')
-        elif args.component == 'transcribe':
+        elif args.component in ['transcribe', 'transcribe-audio']:
             # Default to dictionary filter
             extra_args.extend(['--filter-type', 'dictionary'])
         
-        print(f"🚀 Running {args.component}...")
+        # Add timing display options
+        if args.show_timing:
+            extra_args.append('--show-timing')
+        elif args.no_timing:
+            extra_args.append('--no-timing')
+        
+        # Add global no-filter option
+        if args.no_filter:
+            extra_args.append('--no-filter')
+        
+        component_description = args.component
+        if audio_enabled and 'audio' not in args.component:
+            component_description += " (with audio)"
+        
+        print(f"🚀 Running {component_description}...")
         print(f"   Arguments: {' '.join(extra_args)}")
         run_with_path_and_args(script_path, None, extra_args)
         return
