@@ -1,0 +1,23 @@
+# Ignore temporary files
+temp/
+*.pyc
+__pycache__/
+.DS_Store
+.vscode/
+
+# Ignore output files (optional)
+output/*.mp4
+output/*.txt
+
+# Ignore environment files
+.env
+venv/
+env/
+
+# Ignore IDE files
+.idea/
+*.swp
+*.swo
+
+# Ignore system files
+Thumbs.db
