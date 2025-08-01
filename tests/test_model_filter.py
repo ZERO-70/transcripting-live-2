@@ -5,15 +5,20 @@ Test script for the model-based profanity filter with Hugging Face authenticatio
 
 import sys
 import time
+import os
+from dotenv import load_dotenv
 from model_profanity_filter import ModelBasedProfanityFilter
+
+# Load environment variables
+load_dotenv()
 
 def test_model_filter():
     """Test the model-based profanity filter."""
     print("🧪 Testing Model-Based Profanity Filter")
     print("=" * 50)
     
-    # Test with your HF token
-    hf_token = "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"
+    # Test with HF token from environment
+    hf_token = os.getenv("HUGGINGFACE_TOKEN")
     
     # Test different models
     models_to_test = [
@@ -106,7 +111,7 @@ def compare_filters():
         model_filter = ModelBasedProfanityFilter(
             "model_profanity_config.json",
             model_name="unitary/toxic-bert",
-            hf_token="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"
+            hf_token=os.getenv("HUGGINGFACE_TOKEN")
         )
         model_available = True
     except Exception as e:

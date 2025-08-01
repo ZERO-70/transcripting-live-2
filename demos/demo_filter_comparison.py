@@ -6,6 +6,10 @@ Demo script showing dictionary vs model-based filtering in action.
 import sys
 import os
 import time
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'filters'))
@@ -34,7 +38,7 @@ def demo_filter_comparison():
     model_filter = ModelBasedProfanityFilter(
         "model_profanity_config.json",
         model_name="unitary/toxic-bert",
-        hf_token="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"
+        hf_token=os.getenv("HUGGINGFACE_TOKEN")
     )
     model_load_time = time.time() - start_time
     

@@ -46,7 +46,7 @@ class ModelBasedProfanityFilter:
             hf_token: Hugging Face authentication token
         """
         self.model_name = model_name
-        self.hf_token = hf_token or "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"
+        self.hf_token = hf_token or os.getenv("HUGGINGFACE_TOKEN")
         self.model = None
         self.tokenizer = None
         self._load_dependencies()

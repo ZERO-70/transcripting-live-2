@@ -52,10 +52,16 @@ The system includes several toxicity detection models:
 
 ## Authentication
 
-The model-based filter uses your HuggingFace token for authentication:
-- Token: `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`
-- This is automatically configured in the system
-- Allows access to all supported models
+The model-based filter requires a HuggingFace token for authentication:
+
+1. **Get your token**: Visit https://huggingface.co/settings/tokens
+2. **Set up environment**: Copy `.env.example` to `.env` and add your token:
+   ```
+   HUGGINGFACE_TOKEN=your_token_here
+   ```
+3. **Security**: The token is loaded from environment variables for security
+
+> ⚠️ **Never commit your actual token to version control!**
 
 ## Configuration
 

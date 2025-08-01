@@ -14,13 +14,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Try to import enhanced filter first, fallback to basic
-import sys
-import os
-
-# Add the filters directory to the path
-filters_dir = os.path.join(os.path.dirname(__file__), '..', 'filters')
-sys.path.insert(0, filters_dir)
-
 try:
     from enhanced_profanity_filter import EnhancedProfanityFilter, FilterAction, SeverityLevel
     ENHANCED_FILTER_AVAILABLE = True
@@ -57,7 +50,7 @@ USE_ENHANCED_DATASETS = True  # Use enhanced datasets if available
 
 # Set up transcription model (CPU-friendly)
 print("🤖 Loading Whisper model...")
-model = WhisperModel(MODEL_NAME, compute_type="int16")
+model = WhisperModel(MODEL_NAME, compute_type="int8")
 print(f"✅ Model '{MODEL_NAME}' loaded successfully")
 
 # Set up profanity filter if enabled
@@ -117,47 +110,26 @@ def setup_transcript_file():
 
 def start_ffmpeg_stream(stream_url, max_retries=3):
     """Start ffmpeg process that outputs raw PCM audio from the stream."""
-    
-    # Different FFmpeg options based on stream type
-    if stream_url.startswith("http://"):
-        # HTTP stream - add HTTP-specific options
-        cmd = [
-            "ffmpeg",
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5",
-            "-timeout", "10000000",  # 10 second timeout for HTTP
-            "-user_agent", "live-transcription-client",
-            "-i", stream_url,
-            "-f", "s16le",  # PCM 16-bit little-endian
-            "-acodec", "pcm_s16le",
-            "-ac", "1",  # mono
-            "-ar", str(SAMPLE_RATE),
-            "-loglevel", "error",  # Show errors but reduce verbosity
-            "pipe:1"
-        ]
-    else:
-        # UDP stream - use original options
-        cmd = [
-            "ffmpeg",
-            "-i", stream_url,
-            "-f", "s16le",  # PCM 16-bit little-endian
-            "-acodec", "pcm_s16le",
-            "-ac", "1",  # mono
-            "-ar", str(SAMPLE_RATE),
-            "-loglevel", "error",  # Show errors but reduce verbosity
-            "-reconnect", "1",  # Auto-reconnect for network streams
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5",
-            "pipe:1"
-        ]
+    cmd = [
+        "ffmpeg",
+        "-i", stream_url,
+        "-f", "s16le",  # PCM 16-bit little-endian
+        "-acodec", "pcm_s16le",
+        "-ac", "1",  # mono
+        "-ar", str(SAMPLE_RATE),
+        "-loglevel", "error",  # Show errors but reduce verbosity
+        "-reconnect", "1",  # Auto-reconnect for network streams
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
+        "pipe:1"
+    ]
     
     for attempt in range(max_retries):
         try:
             print(f"🔄 Connecting to stream: {stream_url} (attempt {attempt + 1}/{max_retries})")
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             # Test if the process started successfully
-            time.sleep(2)  # Give HTTP streams more time to establish connection
+            time.sleep(1)
             if proc.poll() is None:  # Process is still running
                 print("✅ Successfully connected to stream")
                 return proc
@@ -238,6 +210,7 @@ def transcriber():
                     # Apply profanity filter if enabled
                     console_text = text
                     file_text = text
+                    filter_info = ""
                     
                     if profanity_filter:
                         # Get colored version for console
@@ -247,9 +220,12 @@ def transcriber():
                         
                         if filter_stats.get("words_filtered", 0) > 0:
                             total_filtered_words += filter_stats["words_filtered"]
+                            if SHOW_FILTER_STATS:
+                                profanity_words = filter_stats.get("profanity_found", [])
+                                filter_info = f" [🛡️ Highlighted: {len(profanity_words)} words]"
                     
-                    # Prepare console output (clean, no filter statistics)
-                    console_output = f"{timestamp_str} {console_text}"
+                    # Prepare console output (with colors)
+                    console_output = f"{timestamp_str} {console_text}{filter_info}"
                     print(console_output)
                     
                     # Save to file if enabled (save plain text version)

@@ -61,10 +61,32 @@ A real-time transcription system with advanced profanity filtering capabilities.
 
 ## 📋 Requirements
 
-Install dependencies:
+### Prerequisites
+- Python 3.8+
+- FFmpeg (for streaming)
+- VLC media player (optional, for viewing streams)
+
+### Installation
+
+1. **Install dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
+
+2. **Environment Setup:**
+Copy the example environment file and configure your API tokens:
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and add your Hugging Face token:
+```
+HUGGINGFACE_TOKEN=your_huggingface_token_here
+```
+
+Get your Hugging Face token from: https://huggingface.co/settings/tokens
+
+> ⚠️ **Important**: Never commit the `.env` file to version control. It's already included in `.gitignore`.
 
 ## 🎯 Quick Start
 

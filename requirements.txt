@@ -1,7 +1,3 @@
-faster-whisper
-numpy
-sounddevice
-transformers
 absl-py==2.3.1
 aiodns==3.1.1
 aiohttp==3.9.1
@@ -172,6 +168,7 @@ pyserial==3.5
 python-apt==2.7.7+ubuntu4
 python-dateutil==2.8.2
 python-debian==0.1.49+ubuntu2
+python-dotenv==1.1.1
 python-gnupg==0.5.2
 pytorch-lightning==1.6.5.post0
 pytorch-metric-learning==2.8.1
@@ -209,7 +206,7 @@ tensorboard-data-server==0.7.2
 tensorboardX==2.6.4
 threadpoolctl==3.6.0
 tiktoken==0.9.0
-tokenizers==0.20.3
+tokenizers==0.21.4
 tomli==2.2.1
 torch==2.7.1
 torch-audiomentations==0.12.0
@@ -217,6 +214,7 @@ torch_pitch_shift==1.2.5
 torchaudio==2.7.1
 torchmetrics==0.11.4
 tqdm==4.67.1
+transformers==4.54.1
 triton==3.3.1
 typer==0.16.0
 typing_extensions==4.14.1
